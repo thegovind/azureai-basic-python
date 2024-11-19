@@ -7,6 +7,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
 from .shared import globals
+from .chat_with_products import chat_with_products
 
 router = fastapi.APIRouter()
 templates = Jinja2Templates(directory="api/templates")
@@ -36,12 +37,8 @@ async def chat_stream_handler(
 
     async def response_stream():
         messages = [{"role": message.role, "content": message.content} for message in chat_request.messages]
-        model_deployment_name = globals["chat_model"]
-        prompt_messages = globals["prompt"].create_messages()
-        chat_coroutine = await chat_client.complete(
-            model=model_deployment_name, messages=prompt_messages + messages, stream=True
-        )
-        async for event in chat_coroutine:
+        chat_coroutine = chat_with_products(messages)
+        for event in chat_coroutine:
             if event.choices:
                 first_choice = event.choices[0]
                 yield (
