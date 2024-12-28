@@ -1,164 +1,85 @@
-from flask import Flask, render_template, request, Response, stream_with_context
-import os
-from azure.ai.projects import AIProjectClient
-from azure.identity import DefaultAzureCredential
+import contextlib
 import logging
-import json
-import sys
-from werkzeug.middleware.proxy_fix import ProxyFix
+import os
+import pathlib
+from typing import Union
 
-# Set up logging with more detail
-logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+import fastapi
+from azure.ai.projects.aio import AIProjectClient
+from azure.ai.inference.prompts import PromptTemplate
+from azure.identity import AzureDeveloperCliCredential, ManagedIdentityCredential
+from dotenv import load_dotenv
+from fastapi.staticfiles import StaticFiles
 
-app = Flask(__name__)
-# ProxyFix helps fix certain proxy headers when your app is behind a proxy (e.g. Azure App Service)
-app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
+from .shared import globals
 
-def check_environment():
+logger = logging.getLogger("azureaiapp")
+logger.setLevel(logging.INFO)
+
+
+@contextlib.asynccontextmanager
+async def lifespan(app: fastapi.FastAPI):
     """
-    Ensures that the required environment variables are set.
-    If any are missing, log an error and exit.
+    Context manager controlling the app's lifespan. This is where we create 
+    our AIProjectClient, chat client, etc., and store them in a global dictionary.
     """
-    required_vars = [
-        "AZURE_AIPROJECT_CONNECTION_STRING",
-        "AZURE_AI_CHAT_DEPLOYMENT_NAME"
-    ]
-    missing = [var for var in required_vars if not os.getenv(var)]
-    if missing:
-        logger.error(f"Missing required environment variables: {missing}")
-        sys.exit(1)
 
-# Initialize at startup
-try:
-    check_environment()
-    logger.info("Initializing AI client...")
+    # Decide which credential to use: AzureDeveloperCliCredential or ManagedIdentityCredential
+    if not os.getenv("RUNNING_IN_PRODUCTION"):
+        if tenant_id := os.getenv("AZURE_TENANT_ID"):
+            logger.info("Using AzureDeveloperCliCredential with tenant_id %s", tenant_id)
+            azure_credential = AzureDeveloperCliCredential(tenant_id=tenant_id)
+        else:
+            logger.info("Using AzureDeveloperCliCredential")
+            azure_credential = AzureDeveloperCliCredential()
+    else:
+        user_identity_client_id = os.getenv("AZURE_CLIENT_ID")
+        logger.info("Using ManagedIdentityCredential with client_id %s", user_identity_client_id)
+        azure_credential = ManagedIdentityCredential(client_id=user_identity_client_id)
 
-    # Create an AIProjectClient from the environment's connection string,
-    # using DefaultAzureCredential to authenticate via a chain of credentials
+    # Create AIProjectClient from the connection string
     project = AIProjectClient.from_connection_string(
+        credential=azure_credential,
         conn_str=os.environ["AZURE_AIPROJECT_CONNECTION_STRING"],
-        credential=DefaultAzureCredential()
     )
-    logger.info("AI client initialized successfully")
-except Exception as e:
-    logger.error(f"Failed to initialize application: {str(e)}", exc_info=True)
-    sys.exit(1)
 
-@app.route("/")
-def index():
+    # Create an async chat client
+    chat = await project.inference.get_chat_completions_client()
+
+    # Load a prompt template (if you need it)
+    prompt = PromptTemplate.from_prompty(pathlib.Path(__file__).parent.resolve() / "prompt.prompty")
+
+    # Store objects globally so routes.py can access them
+    globals["project"] = project
+    globals["chat"] = chat
+    globals["prompt"] = prompt
+    globals["chat_model"] = os.environ["AZURE_AI_CHAT_DEPLOYMENT_NAME"]
+
+    # Yield control back to FastAPI until shutdown
+    yield
+
+    # Cleanup on shutdown
+    await project.close()
+    await chat.close()
+
+
+def create_app() -> fastapi.FastAPI:
     """
-    Renders the main page with the chat UI.
+    Creates and configures the FastAPI app. Mounts 'static' folder, includes routes, etc.
     """
-    logger.info("Serving index page")
-    return render_template("index.html")
+    # Load environment variables if not in production
+    if not os.getenv("RUNNING_IN_PRODUCTION"):
+        logger.info("Loading .env file")
+        load_dotenv(override=True)
 
-@app.route("/chat/stream", methods=["POST"])
-def chat():
-    """
-    Endpoint that streams chat responses line by line in JSON.
-    The front-end library will read each line and parse it as JSON.
-    """
-    try:
-        logger.info("Received chat request")
+    # Create the FastAPI instance with our custom lifespan
+    app = fastapi.FastAPI(lifespan=lifespan)
 
-        # Get the messages array from JSON in the request
-        messages = request.json.get('messages', [])
-        logger.debug(f"Messages received: {messages}")
+    # Mount static files (CSS, JS, images) at /static
+    app.mount("/static", StaticFiles(directory="api/static"), name="static")
 
-        # Get a chat completions client from the AIProjectClient
-        chat_client = project.inference.get_chat_completions_client()
+    # Include our routes from routes.py
+    from . import routes  # noqa
+    app.include_router(routes.router)
 
-        def generate():
-            """
-            Generator function to stream chat responses chunk by chunk.
-            Each chunk is returned as a single line of JSON (no SSE prefix).
-            """
-            try:
-                # Request streaming chat completions
-                response = chat_client.complete(
-                    messages=messages,
-                    model=os.environ["AZURE_AI_CHAT_DEPLOYMENT_NAME"],
-                    stream=True
-                )
-
-                # Iterate through chunks (partial responses)
-                for chunk in response:
-                    logger.debug(f"Chunk received: {chunk}")
-
-                    # Check if the chunk has 'choices', which contain the token deltas
-                    if hasattr(chunk, 'choices') and chunk.choices:
-                        choice = chunk.choices[0]
-                        if hasattr(choice, 'delta'):
-                            # Skip system messages and empty content
-                            if not choice.delta.content:
-                                continue
-
-                            # Convert any datetime fields to ISO format so they're JSON-serializable
-                            response_data = {
-                                "id": getattr(chunk, "id", None),
-                                "created": chunk.created.isoformat() if chunk.created else None,
-                                "model": getattr(chunk, "model", None),
-                                "delta": {
-                                    "content": choice.delta.content
-                                }
-                            }
-
-                            # Yield raw JSON (line-delimited); no "data:" prefix
-                            yield json.dumps(response_data) + "\n"
-
-            except Exception as e:
-                # If an error occurs, log it and send an error message as JSON
-                logger.error(f"Error in chat generation: {str(e)}", exc_info=True)
-                error_response = {"error": str(e)}
-                yield json.dumps(error_response) + "\n"
-
-        # Return a streaming response with line-delimited JSON
-        return Response(
-            stream_with_context(generate()),
-            content_type="text/plain",  # Using plain text to stream multiple JSON objects line by line
-            headers={
-                'Cache-Control': 'no-cache',
-                'Connection': 'keep-alive',
-                # 'X-Accel-Buffering': 'no' is optional; it helps with immediate streaming in some proxies
-                'X-Accel-Buffering': 'no'
-            }
-        )
-
-    except Exception as e:
-        logger.error(f"Error in chat endpoint: {str(e)}", exc_info=True)
-        return {"error": str(e)}, 500
-
-@app.route("/health")
-def health():
-    """
-    Simple health check endpoint that tries to create a chat completions client.
-    """
-    try:
-        # If this succeeds, we consider the service healthy
-        chat_client = project.inference.get_chat_completions_client()
-        logger.debug("Health check - AI client test passed")
-        return {
-            "status": "healthy",
-            "checks": {
-                "ai_client": "ok"
-            }
-        }, 200
-    except Exception as e:
-        logger.error(f"Health check failed: {str(e)}", exc_info=True)
-        return {
-            "status": "unhealthy",
-            "error": str(e)
-        }, 500
-
-if __name__ == "__main__":
-    logger.info("Starting Flask app on port 50505...")
-    app.run(host="0.0.0.0", port=50505, debug=True)
-else:
-    # If running under a WSGI server like gunicorn, inherit its log handlers
-    gunicorn_logger = logging.getLogger('gunicorn.error')
-    app.logger.handlers = gunicorn_logger.handlers
-    app.logger.setLevel(gunicorn_logger.level)
+    return app

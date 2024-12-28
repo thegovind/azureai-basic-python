@@ -49,13 +49,15 @@
                     <span class="input-group-text">
                         <i class="bi bi-chat-dots"></i>
                     </span>
-                    <input id="message" 
-                           name="message" 
-                           class="form-control" 
-                           type="text" 
-                           placeholder="Type your message..." 
-                           aria-label="Type your message"
-                           autocomplete="off">
+                    <input 
+                        id="message" 
+                        name="message" 
+                        class="form-control" 
+                        type="text" 
+                        placeholder="Type your message..." 
+                        aria-label="Type your message"
+                        autocomplete="off"
+                    >
                     <button type="submit" class="btn btn-outline-light">
                         <i class="bi bi-send-fill"></i>
                     </button>
@@ -68,88 +70,97 @@
     <script src="https://cdn.jsdelivr.net/npm/showdown@2.1.0/dist/showdown.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@microsoft/ai-chat-protocol@1.0.0-beta.20240610.1/dist/iife/index.js"></script>
     <script>
+        // Grab DOM elements
         const form = document.getElementById("chat-form");
         const messageInput = document.getElementById("message");
         const targetContainer = document.getElementById("messages");
         const userTemplate = document.querySelector('#message-template-user');
         const assistantTemplate = document.querySelector('#message-template-assistant');
         const converter = new showdown.Converter();
+
+        // We'll store the conversation in this array so the backend knows the context
         const messages = [];
 
-        // Set up AIChatProtocolClient to read from /chat/stream
+        // Initialize the AI Chat Protocol client, pointing to /chat/stream for streaming responses
         const client = new ChatProtocol.AIChatProtocolClient("/chat", {
             basePath: "",
             streamPath: "/stream"
         });
 
-        // Automatically scroll to the bottom when new messages arrive
+        // Utility to auto-scroll to bottom when new messages appear
         function scrollToBottom() {
             targetContainer.scrollTop = targetContainer.scrollHeight;
         }
 
-        // Handle form submission for sending a new message
+        // Form submission handler - sends the user's message to the server, then processes streamed chunks
         form.addEventListener("submit", async function(e) {
             e.preventDefault();
             const message = messageInput.value.trim();
-            if (!message) return;
+            if (!message) return; // ignore empty messages
 
-            // Render user's message
+            // Display the user's message
             const userTemplateClone = userTemplate.content.cloneNode(true);
             userTemplateClone.querySelector(".message-content").innerText = message;
             targetContainer.appendChild(userTemplateClone);
             scrollToBottom();
 
-            // Render assistant "typing" message
+            // Display a "typing" indicator for the assistant
             const assistantTemplateClone = assistantTemplate.content.cloneNode(true);
             let messageDiv = assistantTemplateClone.querySelector(".message-content");
             targetContainer.appendChild(assistantTemplateClone);
             scrollToBottom();
 
-            // Add user's message to the conversation array
+            // Push the user's message into our conversation array
             messages.push({
-                "role": "user",
-                "content": message
+                role: "user",
+                content: message
             });
 
             try {
+                // Clear the input box
                 messageInput.value = "";
-                // Request a streaming completion
+
+                // Request a streaming completion from the server
                 const result = await client.getStreamedCompletion(messages);
 
                 let answer = "";
-                // Each chunk is a line of JSON
+                // The server returns line-delimited JSON, so each chunk is a separate JSON line
                 for await (const response of result) {
+                    // Skip chunks without a delta
                     if (!response.delta) {
                         continue;
                     }
+                    // If there's an error field, display it
                     if (response.error) {
                         messageDiv.innerHTML = `<div class="error-message">Error: ${response.error}</div>`;
                         continue;
                     }
-                    // Append new tokens to the 'answer' string
+                    // Otherwise, accumulate content tokens
                     if (response.delta.content) {
+                        // If this is the first chunk of the answer, remove the "typing..." text
                         if (answer === "") {
                             messageDiv.innerHTML = "";
                         }
                         answer += response.delta.content;
-                        // Convert the answer from Markdown to HTML
+                        // Convert any markdown to HTML
                         messageDiv.innerHTML = converter.makeHtml(answer);
                         scrollToBottom();
                     }
                 }
-                // Finally, store the assistant's full answer in the conversation
+
+                // Add the final assistant message to our conversation state
                 messages.push({
-                    "role": "assistant",
-                    "content": answer
+                    role: "assistant",
+                    content: answer
                 });
 
             } catch (error) {
-                // If there's an error in streaming, display it
+                // On any streaming error, show a basic error message
                 messageDiv.innerHTML = `<div class="error-message">Error: ${error.message || error}</div>`;
             }
         });
 
-        // Focus the message input when the page loads
+        // Focus on the message input upon page load
         window.addEventListener('load', () => {
             messageInput.focus();
         });
