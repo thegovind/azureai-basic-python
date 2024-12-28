@@ -1,19 +1,159 @@
+:root {
+  --primary: #2563eb;
+  --background: #0f172a;
+  --chat-background: #1e293b;
+  --text: #e2e8f0;
+  --border: #334155;
+  --user-message: #1e40af;
+  --assistant-message: #1e293b;
+  --hover: #334155;
+  --input-background: #0f172a;
+}
+
 * {
-    box-sizing: border-box;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
 }
 
 html, body {
-    height: 100%;
+  height: 100%;
+  background-color: var(--background);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
 }
 
-#messages .toast-container {
-    margin-bottom: 12px;
+main {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background-color: var(--chat-background);
 }
 
-.background-user {
-    background-color: #2372cc;
+#messages {
+  flex-grow: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  padding: 2rem 1rem;
 }
 
-.background-assistant {
-    background-color: #2c8310;
+.toast-container {
+  margin-bottom: 0;
+}
+
+.toast {
+  border: 1px solid var(--border);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+  background: none;
+  opacity: 1;
+}
+
+.toast.align-self-end .toast-body {
+  background-color: var(--user-message);
+  border-radius: 1rem 0 1rem 1rem;
+  color: white;
+}
+
+.toast.align-self-start .toast-body {
+  background-color: var(--assistant-message);
+  border-radius: 0 1rem 1rem 1rem;
+  border: 1px solid var(--border);
+}
+
+.toast-header {
+  background: none;
+  border: none;
+  padding: 0.5rem 1rem;
+  color: var(--text);
+  font-size: 0.875rem;
+}
+
+.toast-body {
+  padding: 1rem;
+  line-height: 1.6;
+}
+
+#chat-area {
+  border-top: 1px solid var(--border);
+  background-color: var(--chat-background);
+  padding: 2rem 1rem 4rem 1rem;
+}
+
+.input-group {
+  max-width: 800px;
+  margin: 0 auto;
+  background-color: var(--input-background);
+  border-radius: 0.75rem;
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+#message {
+  border: none;
+  padding: 1rem;
+  background: none;
+  font-size: 0.95rem;
+  color: var(--text);
+}
+
+#message:focus {
+  outline: none;
+  box-shadow: none;
+}
+
+#message::placeholder {
+  color: #64748b;
+}
+
+.input-group-text {
+  background: none;
+  border: none;
+  color: #64748b;
+}
+
+.btn-outline-light {
+  border: none;
+  color: var(--text);
+  background: none;
+  transition: all 0.2s;
+  padding: 0.5rem 1rem;
+}
+
+.btn-outline-light:hover {
+  background-color: var(--hover);
+  color: white;
+}
+
+.typing-indicator {
+  color: #64748b;
+}
+
+/* Code block styling */
+pre {
+  background-color: var(--input-background);
+  padding: 1rem;
+  border-radius: 0.5rem;
+  overflow-x: auto;
+  margin: 1rem 0;
+  border: 1px solid var(--border);
+}
+
+code {
+  font-family: 'Fira Code', monospace;
+  font-size: 0.9rem;
+  color: var(--text);
+}
+
+.error-message {
+    color: #ef4444;
+    padding: 0.5rem;
+    border-radius: 0.5rem;
+    background-color: rgba(239, 68, 68, 0.1);
+    border: 1px solid rgba(239, 68, 68, 0.2);
+}
+
+#chat-form {
+  width: 100%;
 }
